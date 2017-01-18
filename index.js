@@ -1,6 +1,5 @@
 var Service, Characteristic;
 var Wemo = require('wemo-client');
-var wemo = new Wemo();
 
 module.exports = function(homebridge){
   Service = homebridge.hap.Service;
@@ -12,6 +11,7 @@ function WeMoAccessory(log, config) {
   this.log = log;
   this.name = config["name"];
   this.service = config["service"] || "Switch";
+  this.wemo = new Wemo();
   this.wemoName = config["wemo_name"] || this.name; // fallback to "name" if you didn't specify an exact "wemo_name"
   this.client = null; // instance of WemoClient, for controlling the discovered device
   this.log("Searching for WeMo device with exact name '" + this.wemoName + "'...");
@@ -19,11 +19,13 @@ function WeMoAccessory(log, config) {
 }
 
 WeMoAccessory.prototype.search = function() {
-  wemo.discover(function(deviceInfo) {
+  this.wemo.discover(function(deviceInfo) {
+    if (deviceInfo.friendlyName != this.wemoName) return;
+
     this.log("Found '"+deviceInfo.friendlyName+"' device at " + deviceInfo.host + ":" + deviceInfo.port);
 
     // Get the client for the found device
-    this.client = wemo.client(deviceInfo);
+    this.client = this.wemo.client(deviceInfo);
 
     // Handle BinaryState events
     this.client.on('binaryState', function(value) {
