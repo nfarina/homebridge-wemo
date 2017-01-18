@@ -1,5 +1,6 @@
 var Service, Characteristic;
-var wemo = require('wemo');
+var Wemo = require('wemo-client');
+var wemo = new Wemo();
 
 module.exports = function(homebridge){
   Service = homebridge.hap.Service;
@@ -12,28 +13,30 @@ function WeMoAccessory(log, config) {
   this.name = config["name"];
   this.service = config["service"] || "Switch";
   this.wemoName = config["wemo_name"] || this.name; // fallback to "name" if you didn't specify an exact "wemo_name"
-  this.device = null; // instance of WeMo, for controlling the discovered device
+  this.client = null; // instance of WemoClient, for controlling the discovered device
   this.log("Searching for WeMo device with exact name '" + this.wemoName + "'...");
   this.search();
 }
 
 WeMoAccessory.prototype.search = function() {
-  wemo.Search(this.wemoName, function(err, device) {
-    if (!err && device) {
-      this.log("Found '"+this.wemoName+"' device at " + device.ip);
-      this.device = new wemo(device.ip, device.port);
-    }
-    else {
-      this.log("Error finding device '" + this.wemoName + "': " + err);
-      this.log("Continuing search for WeMo device with exact name '" + this.wemoName + "'...");
-      this.search();
-    }
+  wemo.discover(function(deviceInfo) {
+    this.log("Found '"+deviceInfo.friendlyName+"' device at " + deviceInfo.host + ":" + deviceInfo.port);
+
+    // Get the client for the found device
+    this.client = wemo.client(deviceInfo);
+
+    // Handle BinaryState events
+    this.client.on('binaryState', function(value) {
+      // We don't bother updating HomeKit with these values yet, so just log it.
+      this.log('Binary State changed to ' + value);
+    }.bind(this));
+
   }.bind(this));
 }
 
 WeMoAccessory.prototype.getMotion = function(callback) {
 
-  if (!this.device) {
+  if (!this.client) {
     this.log("No '%s' device found (yet?)", this.wemoName);
     callback(new Error("Device not found"), false);
     return;
@@ -41,7 +44,7 @@ WeMoAccessory.prototype.getMotion = function(callback) {
 
   this.log("Getting motion state on the '%s'...", this.wemoName);
 
-  this.device.getBinaryState(function(err, result) {
+  this.client.getBinaryState(function(err, result) {
     if (!err) {
       var binaryState = parseInt(result);
       var powerOn = binaryState > 0;
@@ -57,7 +60,7 @@ WeMoAccessory.prototype.getMotion = function(callback) {
 
 WeMoAccessory.prototype.getPowerOn = function(callback) {
 
-  if (!this.device) {
+  if (!this.client) {
     this.log("No '%s' device found (yet?)", this.wemoName);
     callback(new Error("Device not found"), false);
     return;
@@ -65,7 +68,7 @@ WeMoAccessory.prototype.getPowerOn = function(callback) {
 
   this.log("Getting power state on the '%s'...", this.wemoName);
 
-  this.device.getBinaryState(function(err, result) {
+  this.client.getBinaryState(function(err, result) {
     if (!err) {
       var binaryState = parseInt(result);
       var powerOn = binaryState > 0;
@@ -81,7 +84,7 @@ WeMoAccessory.prototype.getPowerOn = function(callback) {
 
 WeMoAccessory.prototype.setPowerOn = function(powerOn, callback) {
 
-  if (!this.device) {
+  if (!this.client) {
     this.log("No '%s' device found (yet?)", this.wemoName);
     callback(new Error("Device not found"));
     return;
@@ -92,13 +95,13 @@ WeMoAccessory.prototype.setPowerOn = function(powerOn, callback) {
 
   var callbackWasCalled = false;
 
-  this.device.setBinaryState(binaryState, function(err, result) {
+  this.client.setBinaryState(binaryState, function(err, result) {
     if (callbackWasCalled) {
       this.log("WARNING: setBinaryState called its callback more than once! Discarding the second one.");
     }
-    
+
     callbackWasCalled = true;
-    
+
     if (!err) {
       this.log("Successfully set power state on the '%s' to %s", this.wemoName, binaryState);
       callback(null);
@@ -112,7 +115,7 @@ WeMoAccessory.prototype.setPowerOn = function(powerOn, callback) {
 
 WeMoAccessory.prototype.setTargetDoorState = function(targetDoorState, callback) {
 
-  if (!this.device) {
+  if (!this.client) {
     this.log("No '%s' device found (yet?)", this.wemoName);
     callback(new Error("Device not found"));
     return;
@@ -120,7 +123,7 @@ WeMoAccessory.prototype.setTargetDoorState = function(targetDoorState, callback)
 
   this.log("Activating WeMo switch '%s'", this.wemoName);
 
-  this.device.setBinaryState(1, function(err, result) {
+  this.client.setBinaryState(1, function(err, result) {
     if (!err) {
       this.log("Successfully activated WeMo switch '%s'", this.wemoName);
       callback(null);
@@ -133,34 +136,34 @@ WeMoAccessory.prototype.setTargetDoorState = function(targetDoorState, callback)
 }
 
 WeMoAccessory.prototype.getServices = function() {
-  
+
   if (this.service == "Switch") {
     var switchService = new Service.Switch(this.name);
-    
+
     switchService
       .getCharacteristic(Characteristic.On)
       .on('get', this.getPowerOn.bind(this))
       .on('set', this.setPowerOn.bind(this));
-    
+
     return [switchService];
   }
   else if (this.service == "GarageDoor") {
     var garageDoorService = new Service.GarageDoorOpener("Garage Door Opener");
-    
+
     garageDoorService
       .getCharacteristic(Characteristic.TargetDoorState)
       .on('set', this.setTargetDoorState.bind(this));
-    
+
     return [garageDoorService];
   }
   else if (this.service == "Light") {
     var lightbulbService = new Service.Lightbulb(this.name);
-    
+
     lightbulbService
       .getCharacteristic(Characteristic.On)
       .on('get', this.getPowerOn.bind(this))
       .on('set', this.setPowerOn.bind(this));
-    
+
     return [lightbulbService];
   }
   else if (this.service == "MotionSensor") {
@@ -176,5 +179,3 @@ WeMoAccessory.prototype.getServices = function() {
     throw new Error("Unknown service type '%s'", this.service);
   }
 }
-
-
